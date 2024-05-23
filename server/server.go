@@ -950,3 +950,9 @@ func (d *Server) deleteOpen(fileId uint64) {
 		}
 	}
 }
+
+func (d *Server) ChangePasswd(username string, passwd string) {
+	d.lock.Lock()
+	defer d.lock.Unlock()
+	d.authenticator.changePasswd(username, passwd)
+}

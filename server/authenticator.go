@@ -13,6 +13,7 @@ type Authenticator interface {
 	authenticate(sc []byte) (string, error)
 	sum(bs []byte) []byte // GSS_getMIC
 	sessionKey() []byte   // QueryContextAttributes(ctx, SECPKG_ATTR_SESSION_KEY, &out)
+	changePasswd(username string, passwd string)
 }
 
 // NTLMAuthenticator implements session-setup through NTLMv2.
@@ -28,6 +29,11 @@ type NTLMAuthenticator struct {
 
 	ntlm   *ntlm.Server
 	seqNum uint32
+}
+
+func (i *NTLMAuthenticator) changePasswd(u string, p string) {
+	i.UserPassword[u] = p
+	i.ntlm.AddAccount(u, p)
 }
 
 func (i *NTLMAuthenticator) oid() asn1.ObjectIdentifier {
