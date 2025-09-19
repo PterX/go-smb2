@@ -98,6 +98,7 @@ type Open struct {
 	resilientOpenTimeout        time.Duration
 	lockSequenceArray           [64]byte
 	notifyReq                   []byte
+	notifyReqAsyncId            uint64
 	isEa                        bool
 	eaKey                       string
 	isSymlink                   bool
@@ -423,6 +424,7 @@ func (c *conn) treeConnect(pkt []byte) error {
 		if t, ok := c.treeMapByName["\\IPC$"]; ok {
 			rsp.TreeId = t.getTree().treeId
 			tc = t.getTree()
+			tc.refCount++
 		} else {
 			shares := maps.Keys(c.serverCtx.origShares)
 			ft := &ipcTree{
@@ -431,6 +433,7 @@ func (c *conn) treeConnect(pkt []byte) error {
 					treeId:     randint32(),
 					shareFlags: 0,
 					path:       "\\IPC$",
+					refCount:   1,
 				},
 				shares: shares,
 			}
@@ -445,7 +448,8 @@ func (c *conn) treeConnect(pkt []byte) error {
 	} else {
 		parts := strings.Split(r.Path(), "\\")
 		if len(parts) < 1 {
-			return &InvalidRequestError{"bad share: " + r.Path()}
+			rsp.Status = uint32(STATUS_BAD_NETWORK_NAME)
+			return c.sendPacket(rsp, nil, nil)
 		}
 		path := parts[len(parts)-1]
 
@@ -453,7 +457,8 @@ func (c *conn) treeConnect(pkt []byte) error {
 		if !ok {
 			if fs, ok = c.serverCtx.shares[strings.ToUpper(path)+"$"]; !ok {
 				log.Debugf("shares: %v", maps.Keys(c.serverCtx.shares))
-				return &InvalidRequestError{"bad share: " + path}
+				rsp.Status = uint32(STATUS_BAD_NETWORK_NAME)
+				return c.sendPacket(rsp, nil, nil)
 			}
 		}
 
@@ -465,6 +470,7 @@ func (c *conn) treeConnect(pkt []byte) error {
 		if t, ok := c.treeMapByName[path]; ok {
 			rsp.TreeId = t.getTree().treeId
 			tc = t.getTree()
+			tc.refCount++
 		} else {
 			maxIOWrites, maxIoReads := DEFAULT_IOPS, DEFAULT_IOPS
 			if c.serverCtx.maxIOReads > 0 {
@@ -479,6 +485,7 @@ func (c *conn) treeConnect(pkt []byte) error {
 					treeId:     randint32(),
 					shareFlags: 0,
 					path:       path,
+					refCount:   1,
 				},
 				fs:         fs,
 				openFiles:  make(map[uint64]bool),
@@ -508,9 +515,15 @@ func (c *conn) treeDisconnect(pkt []byte) error {
 		log.Warnf(fmt.Sprintf("tree doesn't exist: %d", p.TreeId()))
 	}
 
+	var tree *treeConn = nil
 	if tc != nil {
-		delete(c.treeMapByName, tc.getTree().path)
-		delete(c.treeMapById, tc.getTree().treeId)
+		tree = tc.getTree()
+		tree.refCount--
+		if tree.refCount == 0 {
+			log.Debugf("Deleting tree %s", tree.path)
+			delete(c.treeMapByName, tree.path)
+			delete(c.treeMapById, tree.treeId)
+		}
 	}
 
 	rsp := new(TreeDisconnectResponse)
@@ -518,7 +531,7 @@ func (c *conn) treeDisconnect(pkt []byte) error {
 	rsp.MessageId = p.MessageId()
 	rsp.Flags = 1
 
-	return c.sendPacket(rsp, tc.getTree(), nil)
+	return c.sendPacket(rsp, tree, nil)
 }
 
 func (n *ServerNegotiator) negotiate(conn *conn, pkt []byte) error {

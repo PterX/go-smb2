@@ -5,6 +5,7 @@ type treeConn struct {
 	treeId     uint32
 	shareFlags uint32
 	path       string
+	refCount   int
 
 	// shareType  uint8
 	// capabilities uint32
