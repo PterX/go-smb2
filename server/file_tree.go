@@ -513,7 +513,14 @@ send:
 	t.conn.serverCtx.deleteOpen(fileId.HandleId())
 	t.fs.Close(vfs.VfsHandle(fileId.HandleId()))
 
-	return c.sendPacket(rsp, &t.treeConn, ctx)
+	c.sendPacket(rsp, &t.treeConn, ctx)
+
+	if open != nil && open.notifyReq != nil {
+		rsp1 := new(ErrorResponse)
+		PrepareAsyncResponse(&rsp1.PacketHeader, open.notifyReq, open.notifyReqAsyncId, uint32(STATUS_ACCESS_DENIED))
+		//c.sendPacket(rsp1, &t.treeConn, nil)
+	}
+	return nil
 }
 
 func (t *fileTree) flush(ctx *compoundContext, pkt []byte) error {
@@ -1226,7 +1233,7 @@ func (t *fileTree) changeNotify(ctx *compoundContext, pkt []byte) error {
 
 	c := t.session.conn
 
-	/*res, _ := accept(SMB2_CHANGE_NOTIFY, pkt)
+	res, _ := accept(SMB2_CHANGE_NOTIFY, pkt)
 	r := ChangeNotifyRequestDecoder(res)
 
 	fileId := r.FileId().Decode()
@@ -1236,13 +1243,11 @@ func (t *fileTree) changeNotify(ctx *compoundContext, pkt []byte) error {
 	if IsInvalidFileId(fileId) {
 		log.Errorf("ChangeNotify: invalid fileid")
 		rsp := new(ErrorResponse)
-		PrepareResponse(&rsp.PacketHeader, pkt, uint32(STATUS_INVALID_HANDLE))
+		PrepareResponse(&rsp.PacketHeader, pkt, uint32(STATUS_ACCESS_DENIED))
 		return c.sendPacket(rsp, &t.treeConn, ctx)
 	}
 
-	log.Errorf("ChangeNotify: %d", fileId.HandleId())
-
-	open := t.serverCtx.getOpen(fileId.HandleId())
+	open := t.conn.serverCtx.getOpen(fileId.HandleId())
 	if open == nil {
 		log.Errorf("ChangeNotify: open not found")
 		rsp := new(ErrorResponse)
@@ -1250,9 +1255,9 @@ func (t *fileTree) changeNotify(ctx *compoundContext, pkt []byte) error {
 		return c.sendPacket(rsp, &t.treeConn, ctx)
 	}
 
-	open.notifyReq = pkt
+	log.Debugf("ChangeNotify: file %s, h: %d", open.pathName, fileId.HandleId())
 
-	ch := make(chan *vfs.NotifyEvent)
+	/*ch := make(chan *vfs.NotifyEvent)
 	t.fs.RegisterNotify(vfs.VfsHandle(fileId.HandleId()), ch)
 	go func(ctx *compoundContext, ch chan *vfs.NotifyEvent, isDir bool, pkt []byte) {
 		ev := <-ch
@@ -1267,16 +1272,42 @@ func (t *fileTree) changeNotify(ctx *compoundContext, pkt []byte) error {
 				log.Errorf("Sending notification: %s", strings.ReplaceAll(ev.Name, "/", "\\"))
 				PrepareResponse(&rsp.PacketHeader, pkt, 0)
 				rsp.Flags |= SMB2_FLAGS_ASYNC_COMMAND
-				//c.sendPacket(rsp, &t.treeConn, ctx)
+				c.sendPacket(rsp, &t.treeConn, ctx)
 			}
 		}
 		t.fs.RemoveNotify(vfs.VfsHandle(fileId.HandleId()))
 		close(ch)
 	}(ctx, ch, open.fileAttributes&FILE_ATTRIBUTE_DIRECTORY != 0, open.notifyReq)*/
 
-	rsp := new(ErrorResponse)
-	PrepareResponse(&rsp.PacketHeader, pkt, uint32(STATUS_ACCESS_DENIED))
-	return c.sendPacket(rsp, &t.treeConn, ctx)
+	/*rsp := new(ErrorResponse)
+	PrepareResponse(&rsp.PacketHeader, pkt, uint32(STATUS_NOT_SUPPORTED))
+	return c.sendPacket(rsp, &t.treeConn, ctx)*/
+	// Send PENDING now, and complete after 3s if still open
+	asyncId := randint64()
+	pending := new(ErrorResponse)
+	PrepareAsyncResponse(pending.Header(), pkt, asyncId, uint32(STATUS_PENDING))
+	if err := c.sendPacket(pending, &t.treeConn, ctx); err != nil {
+		return err
+	}
+	open.notifyReqAsyncId = asyncId
+	open.notifyReq = pkt
+
+	handleId := fileId.HandleId()
+	go func(ctx *compoundContext, reqPkt []byte, h uint64) {
+		time.Sleep(5 * time.Second)
+		if t.conn.serverCtx.getOpen(h) == nil {
+			// Open was closed; do not send completion
+			return
+		}
+		open.notifyReq = nil
+
+		// Complete the notify with an empty response
+		final := new(ErrorResponse)
+		PrepareAsyncResponse(&final.PacketHeader, pkt, open.notifyReqAsyncId, uint32(STATUS_ACCESS_DENIED))
+		c.sendPacket(final, &t.treeConn, ctx)
+	}(ctx, pkt, handleId)
+
+	return nil
 }
 
 func (t *fileTree) queryInfoFileSystem(ctx *compoundContext, pkt []byte) error {
