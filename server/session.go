@@ -49,13 +49,15 @@ func (s *session) verify(pkt []byte) (ok bool) {
 
 	p.SetSignature(zero[:])
 
-	h := s.verifier
+	if s.sessionFlags&(SMB2_SESSION_FLAG_IS_GUEST|SMB2_SESSION_FLAG_IS_NULL) == 0 {
+		h := s.verifier
 
-	h.Reset()
+		h.Reset()
 
-	h.Write(pkt)
+		h.Write(pkt)
 
-	p.SetSignature(h.Sum(nil))
+		p.SetSignature(h.Sum(nil))
+	}
 
 	return bytes.Equal(signature, p.Signature())
 }
