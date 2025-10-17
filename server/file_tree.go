@@ -426,7 +426,7 @@ func (t *fileTree) handleAAPLCC(pkt []byte) (Encoder, error) {
 				CommandCode: AAPL_SERVER_QUERY,
 				ReplyBitmap: AAPL_SERVER_CAPS | AAPL_VOLUME_CAPS | AAPL_MODEL_INFO,
 				ServerCaps:  AAPL_SUPPORTS_READDIR_ATTR | /*AAPL_SUPPORTS_OSX_COPYFILE |*/ AAPL_UNIX_BASED | AAPL_SUPPORTS_NFS_ACE,
-				VolumeCaps:/*AAPL_SUPPORT_RESOLVE_ID |*/ AAPL_CASE_SENSITIVE | AAPL_SUPPORTS_FULL_SYNC,
+				VolumeCaps:/*AAPL_SUPPORT_RESOLVE_ID |AAPL_CASE_SENSITIVE |*/ AAPL_SUPPORTS_FULL_SYNC,
 				ModelString: "CloudMachine",
 			},
 		}
@@ -1352,7 +1352,7 @@ func (t *fileTree) queryInfoFileSystem(ctx *compoundContext, pkt []byte) error {
 	case FileFsAttributeInformation:
 		attrs := FILE_SUPPORTS_OPEN_BY_FILE_ID |
 			FILE_SUPPORTS_OBJECT_IDS |
-			FILE_CASE_SENSITIVE_SEARCH |
+			//FILE_CASE_SENSITIVE_SEARCH |
 			FILE_CASE_PRESERVED_NAMES |
 			FILE_PERSISTENT_ACLS |
 			FILE_SUPPORTS_SPARSE_FILES |
