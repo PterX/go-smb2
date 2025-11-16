@@ -94,7 +94,7 @@ func (t *fileTree) create(ctx *compoundContext, pkt []byte) error {
 	}
 
 	if isEA && !fileExists {
-		log.Errorf("attempt to read ea from non-exsiting file: %s", name)
+		log.Debugf("attempt to read ea from non-exsiting file: %s", name)
 		rsp := new(ErrorResponse)
 		PrepareResponse(&rsp.PacketHeader, pkt, uint32(STATUS_NO_SUCH_FILE))
 		return c.sendPacket(rsp, &t.treeConn, ctx)
@@ -206,7 +206,7 @@ func (t *fileTree) create(ctx *compoundContext, pkt []byte) error {
 		attrs, err = t.fs.GetAttr(h)
 	}
 	if err != nil {
-		log.Errorf("open failed: %v, co %x", err, r.CreateOptions())
+		log.Errorf("open failed: %s, %v, co %x", name, err, r.CreateOptions())
 		rsp := new(ErrorResponse)
 		PrepareResponse(&rsp.PacketHeader, pkt, uint32(STATUS_ACCESS_DENIED))
 		return c.sendPacket(rsp, &t.treeConn, ctx)
@@ -756,7 +756,7 @@ func (t *fileTree) writeImpl(ctx *compoundContext, pkt []byte, fileId *FileId, o
 }
 
 func (t *fileTree) lock(ctx *compoundContext, pkt []byte) error {
-	log.Errorf("Lock")
+	log.Debugf("Lock")
 	c := t.session.conn
 
 	//rsp := new(ErrorResponse)
@@ -1241,7 +1241,7 @@ func (t *fileTree) changeNotify(ctx *compoundContext, pkt []byte) error {
 		fileId = ctx.fileId
 	}
 	if IsInvalidFileId(fileId) {
-		log.Errorf("ChangeNotify: invalid fileid")
+		log.Debugf("ChangeNotify: invalid fileid")
 		rsp := new(ErrorResponse)
 		PrepareResponse(&rsp.PacketHeader, pkt, uint32(STATUS_ACCESS_DENIED))
 		return c.sendPacket(rsp, &t.treeConn, ctx)

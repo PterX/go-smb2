@@ -187,7 +187,7 @@ func (fs *PassthroughFS) Open(p string, flags int, mode int) (vfs.VfsHandle, err
 func (fs *PassthroughFS) Close(handle vfs.VfsHandle) error {
 	v, ok := fs.openFiles.Load(handle)
 	if !ok {
-		log.Errorf("Close: filehandle not found %d", handle)
+		log.Debugf("Close: filehandle not found %d", handle)
 		return fmt.Errorf("bad handle")
 	}
 	open := v.(*OpenFile)
