@@ -116,10 +116,21 @@ func SizeFromVfs(a *vfs.Attributes) uint64 {
 }
 
 func UnixModeFromVfs(a *vfs.Attributes) uint16 {
+	m := uint16(0)
 	if s, ok := a.GetUnixMode(); ok {
-		return uint16(s)
+		m = uint16(s)
+	} else {
+		m = 0777
 	}
-	return 0777
+	switch a.GetFileType() {
+	case vfs.FileTypeDirectory:
+		m |= 0x4000
+	case vfs.FileTypeRegularFile:
+		m |= 0x8000
+	case vfs.FileTypeSymlink:
+		m |= 0xa000
+	}
+	return m
 }
 
 func DiskSizeFromVfs(a *vfs.Attributes) uint64 {
@@ -134,9 +145,12 @@ func PermissionsFromVfs(a *vfs.Attributes, path string) uint32 {
 	name := filepath.Base(path)
 	if len(name) > 0 && name[0] == '.' {
 		perm |= FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_ARCHIVE
+		//return perm
 	}
 	if p, ok := a.GetPermissions(); ok {
-		if p&vfs.PermissionsWrite == 0 {
+		if p&vfs.PermissionsWrite == 0 && p&vfs.PermissionsRead == 0 && p&vfs.PermissionsExecute == 0 {
+			perm = FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_READONLY
+		} else if p&vfs.PermissionsWrite == 0 {
 			perm = FILE_ATTRIBUTE_READONLY
 		}
 	}
