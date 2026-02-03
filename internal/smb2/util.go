@@ -149,10 +149,14 @@ func PermissionsFromVfs(a *vfs.Attributes, path string) uint32 {
 	}
 	if p, ok := a.GetPermissions(); ok {
 		if p&vfs.PermissionsWrite == 0 && p&vfs.PermissionsRead == 0 && p&vfs.PermissionsExecute == 0 {
-			perm = FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_READONLY
+			// FIXME: the correct behaviour would be not sending FILE_ATTRIBUTE_READONLY at all
+			perm = FILE_ATTRIBUTE_HIDDEN // |*/ FILE_ATTRIBUTE_READONLY
 		} else if p&vfs.PermissionsWrite == 0 {
 			perm = FILE_ATTRIBUTE_READONLY
 		}
+	}
+	if a.GetFileType() == vfs.FileTypeRegularFile {
+		perm |= FILE_ATTRIBUTE_ARCHIVE
 	}
 	if a.GetFileType() == vfs.FileTypeDirectory {
 		perm |= FILE_ATTRIBUTE_DIRECTORY
@@ -162,7 +166,7 @@ func PermissionsFromVfs(a *vfs.Attributes, path string) uint32 {
 	}
 
 	if perm == 0 {
-		perm = FILE_ATTRIBUTE_NORMAL
+		perm |= FILE_ATTRIBUTE_NORMAL
 	}
 	return perm
 }
