@@ -221,6 +221,12 @@ func (d *Server) Serve(addr string) error {
 			treeMapById:         make(map[uint32]treeOps),
 		}
 
+		log.Debugf("activeConn :%d, accept more: %v", len(d.activeConns), d.acceptSingleConn)
+		if len(d.activeConns) > 0 && d.acceptSingleConn {
+			conn.shutdown()
+			continue
+		}
+
 		d.activeConns[conn] = struct{}{}
 		go conn.runReciever()
 		go conn.runSender()
@@ -234,12 +240,12 @@ func (d *Server) Serve(addr string) error {
 				}
 			}
 		}
-		if d.acceptSingleConn {
+		// Handle the connection in a new goroutine.
+		go func() {
 			run()
-		} else {
-			// Handle the connection in a new goroutine.
-			go run()
-		}
+			delete(d.activeConns, conn)
+		}()
+
 	}
 	return nil
 }
