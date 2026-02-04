@@ -221,10 +221,19 @@ func (d *Server) Serve(addr string) error {
 			treeMapById:         make(map[uint32]treeOps),
 		}
 
-		log.Debugf("activeConn :%d, accept more: %v", len(d.activeConns), d.acceptSingleConn)
+		log.Errorf("activeConn :%d, accept more: %v", len(d.activeConns), d.acceptSingleConn)
 		if len(d.activeConns) > 0 && d.acceptSingleConn {
-			conn.shutdown()
-			continue
+			accept := true
+			for c := range d.activeConns {
+				if c.serverState == STATE_SESSION_ACTIVE {
+					accept = false
+					break
+				}
+			}
+			if !accept {
+				conn.shutdown()
+				continue
+			}
 		}
 
 		d.activeConns[conn] = struct{}{}
@@ -235,8 +244,9 @@ func (d *Server) Serve(addr string) error {
 			if err := conn.Run(); err != nil {
 				log.Errorf("err: %v", err)
 				c.Close()
-				if d.acceptSingleConn {
+				if d.acceptSingleConn && conn.serverState == STATE_SESSION_ACTIVE {
 					d.active = false
+					listener.Close()
 				}
 			}
 		}
