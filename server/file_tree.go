@@ -370,9 +370,9 @@ func (t *fileTree) handleCreateEA(disp uint32, h vfs.VfsHandle, eaKey string) (u
 	status := uint32(0)
 
 	// special cases for Apple
-	if eaKey == "AFP_AfpInfo" {
+	/*if eaKey == "AFP_AfpInfo" {
 		return 0, nil
-	}
+	}*/
 
 	switch disp {
 	case FILE_OPEN_IF:
@@ -1077,7 +1077,7 @@ func newFileIdAllExtdBothDirectoryInformationInfo(d vfs.DirInfo) FileIdAllExtdBo
 	return info
 }
 
-func newFileIdBothDirectoryInformationInfo2(d vfs.DirInfo) FileIdBothDirectoryInformationInfo2 {
+func (t *fileTree) newFileIdBothDirectoryInformationInfo2(d vfs.DirInfo, parent *Open) FileIdBothDirectoryInformationInfo2 {
 	info := FileIdBothDirectoryInformationInfo2{
 		FileIndex: 0,
 		MaxAccess: MaxAccessFromVfs(&d.Attributes),
@@ -1097,6 +1097,30 @@ func newFileIdBothDirectoryInformationInfo2(d vfs.DirInfo) FileIdBothDirectoryIn
 	if info.FileAttributes&FILE_ATTRIBUTE_REPARSE_POINT != 0 {
 		info.MaxAccess = IO_REPARSE_TAG_SYMLINK
 	}
+	if parent != nil && t.conn.serverCtx.xattrs {
+		if d.Name != ".." && d.Name != "." {
+			entryPath := d.Name
+			if parent.pathName != "" && parent.pathName != "/" {
+				entryPath = path.Join(parent.pathName, d.Name)
+			}
+			var (
+				h   vfs.VfsHandle
+				err error
+			)
+			if d.GetFileType() == vfs.FileTypeDirectory {
+				h, err = t.fs.OpenDir(entryPath)
+			} else if d.GetFileType() == vfs.FileTypeRegularFile {
+				h, err = t.fs.Open(entryPath, 0, 0)
+			}
+			if err == nil && h != 0 {
+				var finderInfo [60]byte
+				if n, err := t.fs.Getxattr(h, "AFP_AfpInfo", finderInfo[:]); err == nil && n >= len(info.CompressedFinderInfo) {
+					copy(info.CompressedFinderInfo[:], finderInfo[16:])
+				}
+				t.fs.Close(h)
+			}
+		}
+	}
 
 	return info
 }
@@ -1108,7 +1132,7 @@ func newFileNamesInformationInfo(d vfs.DirInfo) FileNamesInformationInfo {
 	return info
 }
 
-func (t *fileTree) makeItem(class uint8, d vfs.DirInfo) Encoder {
+func (t *fileTree) makeItem(class uint8, d vfs.DirInfo, parent *Open) Encoder {
 	switch class {
 	case FileBothDirectoryInformation:
 		return newFileBothDirectoryInformationInfo(d)
@@ -1116,7 +1140,7 @@ func (t *fileTree) makeItem(class uint8, d vfs.DirInfo) Encoder {
 		return newFileNamesInformationInfo(d)
 	case FileIdBothDirectoryInformation:
 		if t.aaplExtensions {
-			return newFileIdBothDirectoryInformationInfo2(d)
+			return t.newFileIdBothDirectoryInformationInfo2(d, parent)
 		}
 		return newFileIdBothDirectoryInformationInfo(d)
 	case FileDirectoryInformation:
@@ -1172,6 +1196,7 @@ func (t *fileTree) queryDirectory(ctx *compoundContext, pkt []byte) error {
 		Status = ctx.lastStatus
 	}
 
+	open := t.conn.serverCtx.getOpen(fileId.HandleId())
 	pos := 0
 	if r.Flags()&RESTART_SCANS != 0 {
 		pos = 1
@@ -1185,7 +1210,7 @@ func (t *fileTree) queryDirectory(ctx *compoundContext, pkt []byte) error {
 			if attrs, err := t.fs.Lookup(vfs.VfsHandle(fileId.HandleId()), name); err == nil {
 				log.Debugf("lookup %s success", name)
 				d := vfs.DirInfo{Name: name, Attributes: *attrs}
-				info := t.makeItem(r.FileInfoClass(), d)
+				info := t.makeItem(r.FileInfoClass(), d, open)
 				out.Items = append(out.Items, info)
 				Status = 0
 			}
@@ -1194,7 +1219,7 @@ func (t *fileTree) queryDirectory(ctx *compoundContext, pkt []byte) error {
 			if err == nil {
 				for _, d := range dir {
 					if MatchWildcard(d.Name, r.FileName()) {
-						info := t.makeItem(r.FileInfoClass(), d)
+						info := t.makeItem(r.FileInfoClass(), d, open)
 						out.Items = append(out.Items, info)
 						Status = 0
 
@@ -1476,18 +1501,15 @@ func (t *fileTree) queryInfoFile(ctx *compoundContext, pkt []byte) error {
 	case FileEaInformation:
 		info = &FileEaInformationInfo{}
 	case FileStreamInformation:
-		if isDir == 1 {
-			break
-		}
-
 		xattrs, err := t.fs.Listxattr(vfs.VfsHandle(fileId.HandleId()))
-		items := FileStreamInformationInfoItems{
-			FileStreamInformationInfo{
+		items := FileStreamInformationInfoItems{}
+		if isDir == 0 {
+			items = append(items, FileStreamInformationInfo{
 				NextEntryOffset:      0,
 				StreamSize:           SizeFromVfs(a),
 				StreamAllocationSize: DiskSizeFromVfs(a),
 				StreamName:           "::$DATA",
-			},
+			})
 		}
 
 		log.Debugf("queryInfoFile: xattrs ret %v, err %v", xattrs, err)
