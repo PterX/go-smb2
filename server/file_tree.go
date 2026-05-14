@@ -560,7 +560,7 @@ func (t *fileTree) close(ctx *compoundContext, pkt []byte) error {
 	rsp.Status = status
 
 	open := t.conn.serverCtx.getOpen(fileId.HandleId())
-	if r.Flags()&SMB2_CLOSE_FLAG_POSTQUERY_ATTRIB != 0 {
+	if closePostQueryAttrsAllowed(r.Flags(), open) {
 		a, err := t.fs.GetAttr(vfs.VfsHandle(fileId.HandleId()))
 		if err != nil {
 			log.Errorf("Close: GetAttr() failed: %v", err)
@@ -601,6 +601,17 @@ send:
 		//c.sendPacket(rsp1, &t.treeConn, nil)
 	}
 	return nil
+}
+
+func closePostQueryAttrsAllowed(flags uint16, open *Open) bool {
+	if flags&SMB2_CLOSE_FLAG_POSTQUERY_ATTRIB == 0 {
+		return false
+	}
+	// SMB2 close post-query attributes have no POSIX mode field. Returning
+	// them for POSIX opens makes Linux CIFS refresh the inode from DOS attrs
+	// and fall back to mount file_mode, dropping executable bits until the
+	// next POSIX query revalidates the inode.
+	return open == nil || !open.posixSemantics
 }
 
 func (t *fileTree) flush(ctx *compoundContext, pkt []byte) error {
