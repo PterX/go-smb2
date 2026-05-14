@@ -566,11 +566,15 @@ func fileInfoToAttr(stat os.FileInfo) (*vfs.Attributes, error) {
 	}
 
 	a := vfs.Attributes{}
+	a.SetDeviceNumber(sysStat.Dev)
 	a.SetInodeNumber(sysStat.Ino)
+	a.SetLinkCount(sysStat.Nlink)
 	a.SetSizeBytes(uint64(stat.Size()))
 	a.SetDiskSizeBytes(uint64(sysStat.Blocks * 512))
 	a.SetUnixMode(uint32(stat.Mode()))
 	a.SetPermissions(vfs.NewPermissionsFromMode(uint32(stat.Mode().Perm())))
+	a.SetUID(sysStat.UID)
+	a.SetGID(sysStat.GID)
 	a.SetAccessTime(sysStat.Atime)
 	a.SetLastDataModificationTime(stat.ModTime())
 	a.SetBirthTime(sysStat.Btime)

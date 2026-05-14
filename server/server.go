@@ -51,7 +51,8 @@ type Server struct {
 
 	xattrs bool
 
-	ignoreSetAttrErr bool
+	ignoreSetAttrErr          bool
+	enableSMB3PosixExtensions bool
 
 	activeConns map[*conn]struct{}
 
@@ -148,12 +149,13 @@ var (
 )
 
 type ServerConfig struct {
-	AllowGuest       bool
-	MaxIOReads       int
-	MaxIOWrites      int
-	Xatrrs           bool
-	IgnoreSetAttrErr bool
-	AcceptSingleConn bool
+	AllowGuest                bool
+	MaxIOReads                int
+	MaxIOWrites               int
+	Xatrrs                    bool
+	IgnoreSetAttrErr          bool
+	AcceptSingleConn          bool
+	EnableSMB3PosixExtensions bool
 }
 
 func NewServer(cfg *ServerConfig, a Authenticator, shares map[string]vfs.VFSFileSystem) *Server {
@@ -163,18 +165,19 @@ func NewServer(cfg *ServerConfig, a Authenticator, shares map[string]vfs.VFSFile
 	}
 
 	srv := &Server{
-		authenticator:    a,
-		shares:           newShares,
-		origShares:       shares,
-		opens:            map[uint64]*Open{},
-		deletePending:    map[uint64]bool{},
-		allowGuest:       cfg.AllowGuest,
-		maxIOReads:       cfg.MaxIOReads,
-		maxIOWrites:      cfg.MaxIOWrites,
-		xattrs:           cfg.Xatrrs,
-		ignoreSetAttrErr: cfg.IgnoreSetAttrErr,
-		activeConns:      map[*conn]struct{}{},
-		acceptSingleConn: cfg.AcceptSingleConn,
+		authenticator:             a,
+		shares:                    newShares,
+		origShares:                shares,
+		opens:                     map[uint64]*Open{},
+		deletePending:             map[uint64]bool{},
+		allowGuest:                cfg.AllowGuest,
+		maxIOReads:                cfg.MaxIOReads,
+		maxIOWrites:               cfg.MaxIOWrites,
+		xattrs:                    cfg.Xatrrs,
+		ignoreSetAttrErr:          cfg.IgnoreSetAttrErr,
+		enableSMB3PosixExtensions: cfg.EnableSMB3PosixExtensions,
+		activeConns:               map[*conn]struct{}{},
+		acceptSingleConn:          cfg.AcceptSingleConn,
 	}
 	return srv
 }
@@ -735,6 +738,10 @@ func (n *ServerNegotiator) negotiate(conn *conn, pkt []byte) error {
 			default:
 				return &InvalidResponseError{"unknown cipher algorithm"}
 			}
+		case SMB3_POSIX_EXTENSIONS_AVAILABLE:
+			if conn.serverCtx.enableSMB3PosixExtensions && ctx.IsSMB3Posix() {
+				conn.posixExtensions = true
+			}
 		default:
 			// skip unsupported context
 		}
@@ -795,6 +802,9 @@ func (n *ServerNegotiator) makeResponse(conn *conn) (*NegotiateResponse, error) 
 			}
 
 			rsp.Contexts = append(rsp.Contexts, hc, cc)
+			if conn.posixExtensions {
+				rsp.Contexts = append(rsp.Contexts, &PosixContext{})
+			}
 		default:
 			return nil, &InternalError{"unsupported dialect specified"}
 		}
