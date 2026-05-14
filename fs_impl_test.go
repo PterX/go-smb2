@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/macos-fuse-t/go-smb2/vfs"
 )
 
 func TestPassthroughFSRenameKeepsOpenHandleUsable(t *testing.T) {
@@ -32,5 +34,43 @@ func TestPassthroughFSRenameKeepsOpenHandleUsable(t *testing.T) {
 	}
 	if _, err := os.Lstat(filepath.Join(root, "file")); !os.IsNotExist(err) {
 		t.Fatalf("renamed file still exists after unlink: %v", err)
+	}
+}
+
+func TestPassthroughFSSymlinkReopensHandleOnCreatedLink(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "target"), []byte("data"), 0644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	fs := NewPassthroughFS(root)
+	h, err := fs.Open("link", os.O_CREATE|os.O_RDWR|os.O_EXCL, 0644)
+	if err != nil {
+		t.Fatalf("open placeholder: %v", err)
+	}
+	defer fs.Close(h)
+
+	attrs, err := fs.Symlink(h, "target", 1)
+	if err != nil {
+		t.Fatalf("create symlink: %v", err)
+	}
+	if attrs.GetFileType() != vfs.FileTypeSymlink {
+		t.Fatalf("symlink attrs file type = %v, want symlink", attrs.GetFileType())
+	}
+
+	handleAttrs, err := fs.GetAttr(h)
+	if err != nil {
+		t.Fatalf("get attr through symlink handle: %v", err)
+	}
+	if handleAttrs.GetFileType() != vfs.FileTypeSymlink {
+		t.Fatalf("handle attrs file type = %v, want symlink", handleAttrs.GetFileType())
+	}
+
+	target, err := os.Readlink(filepath.Join(root, "link"))
+	if err != nil {
+		t.Fatalf("read created symlink: %v", err)
+	}
+	if target != "target" {
+		t.Fatalf("symlink target = %q, want %q", target, "target")
 	}
 }

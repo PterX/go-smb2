@@ -437,30 +437,35 @@ func (fs *PassthroughFS) Symlink(targetHandle vfs.VfsHandle, source string, flag
 	sourceDir := filepath.Dir(path.Clean(path.Join(targetDir, source)))
 
 	target := open.path
-	curDir, _ := os.Getwd()
-	if flag != 0 {
-		os.Chdir(targetDir)
-		target = path.Base(open.path)
-	}
 	log.Debugf("td %s sd %s, t %s s %s", targetDir, sourceDir, target, source)
 	if targetDir == sourceDir && target == source {
 		log.Errorf("can't create symlink for the same file")
 		return nil, fmt.Errorf("already exists")
 	}
-	os.Remove(open.path)
+	if err := open.f.Close(); err != nil {
+		log.Errorf("close symlink placeholder failed: %s, %v", open.path, err)
+		return nil, err
+	}
+	if err := os.Remove(open.path); err != nil && !os.IsNotExist(err) {
+		log.Errorf("remove symlink placeholder failed: %s, %v", open.path, err)
+		return nil, err
+	}
 
 	log.Debugf("symlink %s -> %s", source, target)
 	err := os.Symlink(source, target)
-	if flag != 0 {
-		os.Chdir(curDir)
-	}
-
 	if err != nil {
 		log.Errorf("symlink failed: %s -> %s, %v", source, target, err)
 		return nil, err
 	}
 
-	info, err := os.Lstat(open.path)
+	linkFile, err := openSymlink(open.path)
+	if err != nil {
+		log.Errorf("open symlink handle failed: %s, %v", open.path, err)
+		return nil, err
+	}
+	open.f = linkFile
+
+	info, err := open.f.Stat()
 	if err != nil {
 		return nil, err
 	}
