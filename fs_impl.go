@@ -50,14 +50,17 @@ func (fs *PassthroughFS) GetAttr(handle vfs.VfsHandle) (*vfs.Attributes, error) 
 			return nil, fmt.Errorf("bad handle")
 		}
 		open := v.(*OpenFile)
-		p = open.path
+		info, err := open.f.Stat()
+		if err != nil {
+			return nil, err
+		}
+		return fileInfoToAttr(info)
 	}
 
 	info, err := os.Lstat(p)
 	if err != nil {
 		return nil, err
 	}
-
 	a, err := fileInfoToAttr(info)
 	if err != nil {
 		return nil, err
@@ -403,18 +406,23 @@ func (fs *PassthroughFS) Rename(from vfs.VfsHandle, to string, flags int) error 
 		return fmt.Errorf("bad handle")
 	}
 	open := v.(*OpenFile)
+	target := path.Join(fs.rootPath, to)
 
 	// flags == 1 : replace if exists
 	if flags == 0 {
-		if _, err := os.Stat(to); err == nil {
+		if _, err := os.Stat(target); err == nil {
 			return fmt.Errorf("already exists")
 		}
 	}
 
 	stats.AddRename(open.path)
 
-	log.Debugf("rename: %s to %s", open.path, path.Join(fs.rootPath, to))
-	return os.Rename(open.path, path.Join(fs.rootPath, to))
+	log.Debugf("rename: %s to %s", open.path, target)
+	if err := os.Rename(open.path, target); err != nil {
+		return err
+	}
+	open.path = target
+	return nil
 }
 
 func (fs *PassthroughFS) Symlink(targetHandle vfs.VfsHandle, source string, flag int) (*vfs.Attributes, error) {

@@ -741,7 +741,7 @@ type FileBothDirectoryInformationInfo struct {
 }
 
 func (i FileBothDirectoryInformationInfo) Size() int {
-	return Align(82+int(utf16le.EncodedStringLen(i.FileName)), 8)
+	return Align(94+int(utf16le.EncodedStringLen(i.FileName)), 8)
 }
 
 func (i FileBothDirectoryInformationInfo) Encode(pkt []byte) {
@@ -756,7 +756,8 @@ func (i FileBothDirectoryInformationInfo) Encode(pkt []byte) {
 	le.PutUint32(pkt[56:], i.FileAttributes)
 	le.PutUint32(pkt[60:], uint32(utf16le.EncodedStringLen(i.FileName)))
 	le.PutUint32(pkt[64:], i.EaSize)
-	utf16le.EncodeString(pkt[82:], i.FileName)
+	pkt[68] = i.ShortNameLength
+	utf16le.EncodeString(pkt[94:], i.FileName)
 }
 
 type FileIdBothDirectoryInformationInfo struct {

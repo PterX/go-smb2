@@ -563,7 +563,7 @@ func (t *fileTree) close(ctx *compoundContext, pkt []byte) error {
 	if r.Flags()&SMB2_CLOSE_FLAG_POSTQUERY_ATTRIB != 0 {
 		a, err := t.fs.GetAttr(vfs.VfsHandle(fileId.HandleId()))
 		if err != nil {
-			log.Errorf("Close: GetAttr() failed")
+			log.Errorf("Close: GetAttr() failed: %v", err)
 			goto send
 		}
 
@@ -1755,7 +1755,7 @@ func (t *fileTree) queryInfoFile(ctx *compoundContext, pkt []byte) error {
 	name := open.pathName
 	a, err := t.fs.GetAttr(vfs.VfsHandle(fileId.HandleId()))
 	if err != nil {
-		log.Errorf("queryInfoFile: GetAttr() failed")
+		log.Errorf("queryInfoFile: GetAttr() failed: %v", err)
 		rsp := new(ErrorResponse)
 		PrepareResponse(&rsp.PacketHeader, pkt, uint32(STATUS_INVALID_HANDLE))
 		return c.sendPacket(rsp, &t.treeConn, ctx)
@@ -2059,6 +2059,13 @@ func (t *fileTree) setBasicInfo(ctx *compoundContext, fileId *FileId, open *Open
 	info := FileBasicInformationInfoDecoder(r.Buffer())
 
 	a := new(vfs.Attributes)
+	if fileAttrs := info.FileAttributes(); fileAttrs != 0 {
+		if oldAttrs, err := t.fs.GetAttr(vfs.VfsHandle(fileId.HandleId())); err == nil {
+			if mode, ok := oldAttrs.GetUnixMode(); ok {
+				a.SetUnixMode(unixModeWithFileAttributes(mode, fileAttrs))
+			}
+		}
+	}
 
 	ns := info.LastAccessTime().Nanoseconds()
 	if ns != 0 {
@@ -2097,6 +2104,13 @@ func (t *fileTree) setBasicInfo(ctx *compoundContext, fileId *FileId, open *Open
 	rsp := new(SetInfoResponse)
 	PrepareResponse(&rsp.PacketHeader, pkt, 0)
 	return c.sendPacket(rsp, &t.treeConn, ctx)
+}
+
+func unixModeWithFileAttributes(mode uint32, fileAttrs uint32) uint32 {
+	if fileAttrs&FILE_ATTRIBUTE_READONLY != 0 {
+		return mode &^ 0222
+	}
+	return mode | 0200
 }
 
 func (t *fileTree) setEndOfFileInfo(ctx *compoundContext, fileId *FileId, pkt []byte) error {
@@ -2249,6 +2263,10 @@ func (t *fileTree) setRename(ctx *compoundContext, fileId *FileId, pkt []byte) e
 		rsp := new(ErrorResponse)
 		PrepareResponse(&rsp.PacketHeader, pkt, uint32(STATUS_ACCESS_DENIED))
 		return c.sendPacket(rsp, &t.treeConn, ctx)
+	}
+	if open := t.conn.serverCtx.getOpen(fileId.HandleId()); open != nil {
+		open.pathName = to
+		open.fileName = path.Base(to)
 	}
 
 	rsp := new(SetInfoResponse)
