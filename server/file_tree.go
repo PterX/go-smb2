@@ -282,6 +282,7 @@ func (t *fileTree) create(ctx *compoundContext, pkt []byte) error {
 		eaKey:             eaKey,
 		isSymlink:         isSymlink,
 		deleteOnClose:     (r.CreateOptions()&FILE_DELETE_ON_CLOSE != 0),
+		posixSemantics:    t.conn.posixExtensions,
 	}
 
 	cc := r.CreateContexts()
@@ -580,6 +581,9 @@ func (t *fileTree) close(ctx *compoundContext, pkt []byte) error {
 		rsp.FileAttributes = PermissionsFromVfs(a, open.pathName)
 	}
 send:
+	if err := t.applyPosixDeleteOnClose(fileId, open); err != nil {
+		log.Errorf("POSIX delete-on-close failed: %v", err)
+	}
 	deletePending := open != nil && t.conn.serverCtx.closeOpen(open)
 	if deletePending {
 		if err := t.fs.Unlink(vfs.VfsHandle(fileId.HandleId())); err != nil {
@@ -1469,6 +1473,8 @@ func (t *fileTree) queryDirectory(ctx *compoundContext, pkt []byte) error {
 	if r.Flags()&(RESTART_SCANS|REOPEN) != 0 {
 		readDirFlags = vfs.ReadDirRestart
 		open.queryDirectoryPending = nil
+		open.queryDirectorySingleName = ""
+		open.queryDirectorySingleDone = false
 	}
 
 	name := r.FileName()
@@ -1479,12 +1485,16 @@ func (t *fileTree) queryDirectory(ctx *compoundContext, pkt []byte) error {
 		Status = uint32(STATUS_NO_SUCH_FILE)
 
 		if !ContainsWildcard(name) {
-			if attrs, err := t.fs.Lookup(vfs.VfsHandle(fileId.HandleId()), name); err == nil {
+			if open.queryDirectorySingleDone && open.queryDirectorySingleName == name {
+				Status = uint32(STATUS_NO_MORE_FILES)
+			} else if attrs, err := t.fs.Lookup(vfs.VfsHandle(fileId.HandleId()), name); err == nil {
 				log.Debugf("lookup %s success", name)
 				d := vfs.DirInfo{Name: name, Attributes: *attrs}
 				info := t.makeItem(r.FileInfoClass(), d, open)
 				if appendDirectoryInfo(out, info, maxOutputSize) {
 					Status = 0
+					open.queryDirectorySingleName = name
+					open.queryDirectorySingleDone = true
 				} else {
 					Status = uint32(STATUS_BUFFER_TOO_SMALL)
 				}
@@ -2140,12 +2150,22 @@ func (t *fileTree) setDispositionInfo(ctx *compoundContext, fileId *FileId, open
 		return c.sendPacket(rsp, &t.treeConn, ctx)
 	}
 
+	if status := t.applyDeleteDisposition(fileId, open); status != 0 {
+		rsp := new(ErrorResponse)
+		PrepareResponse(&rsp.PacketHeader, pkt, status)
+		return c.sendPacket(rsp, &t.treeConn, ctx)
+	}
+
+	rsp := new(SetInfoResponse)
+	PrepareResponse(&rsp.PacketHeader, pkt, 0)
+	return c.sendPacket(rsp, &t.treeConn, ctx)
+}
+
+func (t *fileTree) applyDeleteDisposition(fileId *FileId, open *Open) uint32 {
 	attrs, err := t.fs.GetAttr(vfs.VfsHandle(fileId.HandleId()))
 	if err != nil {
 		log.Errorf("Delete failed to get attrs: %v", err)
-		rsp := new(ErrorResponse)
-		PrepareResponse(&rsp.PacketHeader, pkt, uint32(STATUS_ACCESS_DENIED))
-		return c.sendPacket(rsp, &t.treeConn, ctx)
+		return uint32(STATUS_ACCESS_DENIED)
 	}
 
 	if attrs.GetFileType() == vfs.FileTypeDirectory {
@@ -2159,17 +2179,43 @@ func (t *fileTree) setDispositionInfo(ctx *compoundContext, fileId *FileId, open
 			}
 			if !isEmpty {
 				log.Debugf("Delete failed: directory not empty: %v", err)
-				rsp := new(ErrorResponse)
-				PrepareResponse(&rsp.PacketHeader, pkt, uint32(STATUS_DIRECTORY_NOT_EMPTY))
-				return c.sendPacket(rsp, &t.treeConn, ctx)
+				return uint32(STATUS_DIRECTORY_NOT_EMPTY)
 			}
 		}
 	}
-	t.conn.serverCtx.setDeletePending(open.durableFileId, true)
 
-	rsp := new(SetInfoResponse)
-	PrepareResponse(&rsp.PacketHeader, pkt, 0)
-	return c.sendPacket(rsp, &t.treeConn, ctx)
+	if open.posixSemantics {
+		if err := t.applyPosixDelete(fileId, open); err != nil {
+			status := STATUS_ACCESS_DENIED
+			if os.IsNotExist(err) {
+				status = STATUS_OBJECT_NAME_NOT_FOUND
+			}
+			log.Errorf("POSIX delete failed: %v", err)
+			return uint32(status)
+		}
+	} else {
+		t.conn.serverCtx.setDeletePending(open.durableFileId, true)
+	}
+	return 0
+}
+
+func (t *fileTree) applyPosixDelete(fileId *FileId, open *Open) error {
+	if err := t.fs.Unlink(vfs.VfsHandle(fileId.HandleId())); err != nil {
+		return err
+	}
+	t.conn.serverCtx.setDeletePending(open.durableFileId, false)
+	return nil
+}
+
+func (t *fileTree) applyPosixDeleteOnClose(fileId *FileId, open *Open) error {
+	if open == nil || !open.deleteOnClose || !open.posixSemantics {
+		return nil
+	}
+	if err := t.applyPosixDelete(fileId, open); err != nil {
+		return err
+	}
+	open.deleteOnClose = false
+	return nil
 }
 
 func (t *fileTree) setDispositionInfoEa(ctx *compoundContext, fileId *FileId, eaKey string, pkt []byte) error {

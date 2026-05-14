@@ -101,9 +101,12 @@ type Open struct {
 	notifyReq                   []byte
 	notifyReqAsyncId            uint64
 	queryDirectoryPending       []vfs.DirInfo
+	queryDirectorySingleName    string
+	queryDirectorySingleDone    bool
 	isEa                        bool
 	eaKey                       string
 	isSymlink                   bool
+	posixSemantics              bool
 	createGuid                  Guid
 	appInstanceId               Guid
 	isPersistent                bool
