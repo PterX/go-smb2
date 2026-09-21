@@ -1023,6 +1023,37 @@ func (r WriteRequestDecoder) Data() []byte {
 // SMB2 LOCK Request Packet
 //
 
+const lockElementSize = 24
+
+type LockRequestDecoder []byte
+
+func (r LockRequestDecoder) IsInvalid() bool {
+	if len(r) < 48 || r.StructureSize() != 48 || r.LockCount() == 0 {
+		return true
+	}
+	return len(r) < 24+int(r.LockCount())*lockElementSize
+}
+
+func (r LockRequestDecoder) StructureSize() uint16 { return le.Uint16(r[:2]) }
+func (r LockRequestDecoder) LockCount() uint16     { return le.Uint16(r[2:4]) }
+func (r LockRequestDecoder) LockSequence() uint32  { return le.Uint32(r[4:8]) }
+func (r LockRequestDecoder) FileId() FileIdDecoder { return FileIdDecoder(r[8:24]) }
+
+func (r LockRequestDecoder) Locks() []LockElementDecoder {
+	locks := make([]LockElementDecoder, r.LockCount())
+	for i := range locks {
+		start := 24 + i*lockElementSize
+		locks[i] = LockElementDecoder(r[start : start+lockElementSize])
+	}
+	return locks
+}
+
+type LockElementDecoder []byte
+
+func (r LockElementDecoder) Offset() uint64 { return le.Uint64(r[:8]) }
+func (r LockElementDecoder) Length() uint64 { return le.Uint64(r[8:16]) }
+func (r LockElementDecoder) Flags() uint32  { return le.Uint32(r[16:20]) }
+
 // ----------------------------------------------------------------------------
 // SMB2 ECHO Request Packet
 //

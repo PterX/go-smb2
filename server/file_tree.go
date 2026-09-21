@@ -737,6 +737,11 @@ func (t *fileTree) readImpl(ctx *compoundContext, pkt []byte, fileId *FileId, op
 	if open.isEa {
 		return t.readEA(ctx, fileId, open, buf, pkt)
 	}
+	if c.serverCtx.ioConflictsWithByteRangeLock(open, r.Offset(), uint64(r.Length()), false) {
+		rsp := new(ErrorResponse)
+		PrepareResponse(rsp.Header(), pkt, uint32(STATUS_FILE_LOCK_CONFLICT))
+		return c.sendPacket(rsp, &t.treeConn, ctx)
+	}
 
 	n, err = t.fs.Read(vfs.VfsHandle(fileId.HandleId()), buf, r.Offset(), 0)
 	if err != nil && n == 0 {
@@ -827,6 +832,11 @@ func (t *fileTree) writeImpl(ctx *compoundContext, pkt []byte, fileId *FileId, o
 		t.fs.Setxattr(vfs.VfsHandle(fileId.HandleId()), open.eaKey, r.Data())
 		n = len(r.Data())
 	} else {
+		if c.serverCtx.ioConflictsWithByteRangeLock(open, r.Offset(), uint64(r.Length()), true) {
+			rsp := new(ErrorResponse)
+			PrepareResponse(rsp.Header(), pkt, uint32(STATUS_FILE_LOCK_CONFLICT))
+			return c.sendPacket(rsp, &t.treeConn, ctx)
+		}
 		log.Debugf("Write: %d offset %d", r.Length(), r.Offset())
 		n, err = t.fs.Write(vfs.VfsHandle(fileId.HandleId()), r.Data(), r.Offset(), int(r.Flags()))
 	}
@@ -850,12 +860,81 @@ func (t *fileTree) lock(ctx *compoundContext, pkt []byte) error {
 	log.Debugf("Lock")
 	c := t.session.conn
 
-	//rsp := new(ErrorResponse)
-	//PrepareResponse(&rsp.PacketHeader, pkt, uint32(STATUS_NOT_SUPPORTED))
-	rsp := new(LockResponse)
-	PrepareResponse(&rsp.PacketHeader, pkt, 0)
+	res, err := accept(SMB2_LOCK, pkt)
+	if err != nil {
+		return err
+	}
+	r := LockRequestDecoder(res)
+	if r.IsInvalid() {
+		return &InvalidRequestError{"broken lock request"}
+	}
 
-	return c.sendPacket(rsp, &t.treeConn, ctx)
+	fileID := r.FileId().Decode()
+	if ctx != nil && ctx.fileId != nil {
+		fileID = ctx.fileId
+	}
+	if IsInvalidFileId(fileID) {
+		rsp := new(ErrorResponse)
+		PrepareResponse(rsp.Header(), pkt, uint32(STATUS_INVALID_HANDLE))
+		return c.sendPacket(rsp, &t.treeConn, ctx)
+	}
+	open := c.serverCtx.getOpen(fileID.HandleId())
+	if open == nil || open.durableFileId != fileID.NodeId() {
+		rsp := new(ErrorResponse)
+		PrepareResponse(rsp.Header(), pkt, uint32(STATUS_INVALID_HANDLE))
+		return c.sendPacket(rsp, &t.treeConn, ctx)
+	}
+
+	elements, status := decodeSMBLockElements(r.Locks())
+	if status != STATUS_SUCCESS {
+		rsp := new(ErrorResponse)
+		PrepareResponse(rsp.Header(), pkt, uint32(status))
+		return c.sendPacket(rsp, &t.treeConn, ctx)
+	}
+
+	finish := func(request []byte, compound *compoundContext) error {
+		old, status := c.serverCtx.reserveByteRangeLocks(open, elements)
+		if status == STATUS_SUCCESS {
+			if locker, ok := t.fs.(vfs.ByteRangeLocker); ok {
+				locks := make([]vfs.ByteRangeLock, len(elements))
+				for i, element := range elements {
+					locks[i] = element.vfsLock()
+				}
+				if err := locker.Lock(vfs.VfsHandle(open.fileId), locks); err != nil {
+					c.serverCtx.rollbackByteRangeLocks(open, old)
+					status = lockErrorStatus(err)
+				}
+			}
+		}
+		if status != STATUS_SUCCESS {
+			rsp := new(ErrorResponse)
+			PrepareResponse(rsp.Header(), request, uint32(status))
+			return c.sendPacket(rsp, &t.treeConn, compound)
+		}
+		rsp := new(LockResponse)
+		PrepareResponse(&rsp.PacketHeader, request, 0)
+		return c.sendPacket(rsp, &t.treeConn, compound)
+	}
+
+	// Do not occupy the connection's serial slow path while a blocking lock
+	// waits; the unlock that wakes it may arrive over the same connection.
+	blocking := false
+	for _, element := range elements {
+		if !element.unlock && !element.failImmediately {
+			blocking = true
+			break
+		}
+	}
+	if blocking && ctx == nil {
+		request := append([]byte(nil), pkt...)
+		go func() {
+			if err := finish(request, nil); err != nil {
+				log.Errorf("Lock response failed: %v", err)
+			}
+		}()
+		return nil
+	}
+	return finish(pkt, ctx)
 }
 
 func (t *fileTree) handleReparsePointReq(ctx *compoundContext, pkt []byte) error {

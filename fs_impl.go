@@ -9,6 +9,7 @@ import (
 	"path"
 	"path/filepath"
 	"sync"
+	"syscall"
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/macos-fuse-t/go-smb2/stats"
@@ -127,6 +128,18 @@ func (fs *PassthroughFS) FSync(handle vfs.VfsHandle) error {
 
 func (fs *PassthroughFS) Flush(handle vfs.VfsHandle) error {
 	return nil
+}
+
+func (fs *PassthroughFS) Lock(handle vfs.VfsHandle, locks []vfs.ByteRangeLock) error {
+	v, ok := fs.openFiles.Load(handle)
+	if !ok {
+		return syscall.EBADF
+	}
+	open := v.(*OpenFile)
+	if open.isDir {
+		return syscall.EBADF
+	}
+	return applyFileLocks(open.f, locks)
 }
 
 func (fs *PassthroughFS) Mknod(vfs.VfsNode, string, int, int) (*vfs.Attributes, error) {

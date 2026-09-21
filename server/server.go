@@ -58,7 +58,8 @@ type Server struct {
 
 	acceptSingleConn bool
 
-	lock sync.Mutex
+	lock     sync.Mutex
+	lockCond *sync.Cond
 }
 
 type OpLockState uint8
@@ -85,6 +86,7 @@ type Open struct {
 	currentEaIndex              uint32
 	currentQuotaIndex           uint32
 	lockCount                   int
+	byteRangeLocks              []smbByteRangeLock
 	pathName                    string
 	fileName                    string
 	resumeKey                   [24]byte
@@ -182,6 +184,7 @@ func NewServer(cfg *ServerConfig, a Authenticator, shares map[string]vfs.VFSFile
 		activeConns:               map[*conn]struct{}{},
 		acceptSingleConn:          cfg.AcceptSingleConn,
 	}
+	srv.lockCond = sync.NewCond(&srv.lock)
 	return srv
 }
 
@@ -1080,6 +1083,7 @@ func (d *Server) getOpen(fileId uint64) *Open {
 func (d *Server) deleteOpen(fileId uint64) {
 	d.lock.Lock()
 	defer d.lock.Unlock()
+	defer d.broadcastLockWaiters()
 	if open, ok := d.opens[fileId]; ok {
 		delete(d.opens, fileId)
 		if open.isDurable {
@@ -1109,6 +1113,7 @@ func (d *Server) isDeletePending(node uint64) bool {
 func (d *Server) closeOpen(open *Open) bool {
 	d.lock.Lock()
 	defer d.lock.Unlock()
+	defer d.broadcastLockWaiters()
 
 	if open.deleteOnClose {
 		d.deletePending[open.durableFileId] = true
@@ -1131,6 +1136,14 @@ func (d *Server) closeOpen(open *Open) bool {
 
 	delete(d.deletePending, open.durableFileId)
 	return true
+}
+
+// broadcastLockWaiters tolerates Server values constructed directly by tests
+// and embedders instead of through NewServer.
+func (d *Server) broadcastLockWaiters() {
+	if d.lockCond != nil {
+		d.lockCond.Broadcast()
+	}
 }
 
 func (d *Server) BreakNode(node uint64) {
